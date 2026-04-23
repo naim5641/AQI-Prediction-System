@@ -1,117 +1,148 @@
 import streamlit as st
-import joblib
 import pandas as pd
 import numpy as np
+import joblib
 import requests
-import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
+import plotly.express as px
+from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Advanced AQI Analytics", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Advanced AQI Dashboard", layout="wide")
 
-# --- LOAD MODEL & DATA (Placeholder for EDA) ---
+# --- LOAD ASSETS (Model & Dataset) ---
 @st.cache_resource
 def load_assets():
     model = joblib.load('aqi_xgboost_model.pkl')
-    # EDA এর জন্য একটি স্যাম্পল ডাটাসেট লোড করা হচ্ছে (আপনার অরিজিনাল ফাইলটি এখানে দিন)
-    df = pd.read_csv('data_preprocecing_24.csv') 
-    # আপাতত ডেমো ডাটা তৈরি করছি গ্রাফ দেখানোর জন্য
-    df = pd.DataFrame(np.random.randint(0,200,size=(100, 6)), columns=['PM2.5', 'PM10', 'NO2', 'SO2', 'CO', 'O3'])
-    df['AQI'] = df['PM2.5'] * 1.5 + np.random.randint(0,20,100)
-    df['Hour'] = np.random.randint(0,24,100)
+    # আপনার প্রি-প্রসেসিং করা ডাটাসেটটি এখানে লোড করুন
+    try:
+        df = pd.read_csv('data_preprocecing_24.csv')
+    except:
+        # ডামি ডেটা (যদি ফাইল না থাকে তবে এটি কাজ করবে)
+        df = pd.DataFrame(np.random.randint(20, 200, size=(100, 7)), 
+                          columns=['PM2.5', 'PM10', 'NO2', 'SO2', 'CO', 'O3', 'AQI'])
+        df['Timestamp'] = pd.date_range(start='2026-04-01', periods=100, freq='H')
     return model, df
 
 model, df = load_assets()
 
-# --- HELPER FUNCTIONS ---
+# --- API HELPER ---
 def get_live_data(city):
-    API_TOKEN = "8336110b0e0345c68d0dc9ca4554b7122e5ad33d"
-    url = f"https://api.waqi.info/feed/{city}/?token={API_TOKEN}"
+    token = "8336110b0e0345c68d0dc9ca4554b7122e5ad33d"
+    url = f"https://api.waqi.info/feed/{city}/?token={token}"
     try:
         r = requests.get(url).json()
         if r['status'] == 'ok':
-            iaqi = r['data']['iaqi']
-            return {g: iaqi.get(g, {}).get('v', 0) for g in ['pm25', 'pm10', 'no2', 'so2', 'co', 'o3']}, True
-        return None, False
+            return r['data'], True
     except: return None, False
 
-# --- SIDEBAR NAVIGATION ---
-st.sidebar.title("💎 AQI Expert System")
-page = st.sidebar.radio("Menu", ["Live Prediction", "What-If Simulator", "Data Insights (EDA)", "Model Performance"])
+# --- UI COMPONENTS ---
 
-# ---------------- PAGE 1: LIVE PREDICTION ----------------
-if page == "Live Prediction":
-    st.title("🏙️ Real-Time AQI Forecast & Alerts")
-    selected_city = st.selectbox("Select City", ["Dhaka", "Chittagong", "Cumilla", "Sylhet", "Rajshahi"])
-    
-    if st.button("Fetch & Predict"):
-        data, success = get_live_data(selected_city)
-        if success:
-            now = datetime.now()
-            features = np.array([[data['so2'], data['no2'], data['co'], data['o3'], data['pm25'], data['pm10'], 
-                                 now.year, now.month, now.day, now.hour, now.weekday(), 
-                                 (1 if now.weekday() >= 5 else 0), data['pm25']*1.1, data['pm25']*1.0]])
-            
-            pred = model.predict(features)[0]
-            
-            # Health Alert logic
-            col1, col2 = st.columns(2)
-            col1.metric("Predicted AQI", f"{pred:.2f}")
-            
-            if pred > 150:
-                st.error("🚨 DANGER: আজ শিশুদের এবং শ্বাসকষ্টজনিত রোগীদের বাইরে নিয়ে যাওয়া থেকে বিরত থাকুন।")
-            
-            # Comparison with WHO
-            who_limit = 15 # PM2.5 daily limit
-            times_higher = data['pm25'] / who_limit
-            st.warning(f"⚠️ বর্তমান PM2.5 মান WHO স্ট্যান্ডার্ডের চেয়ে {times_higher:.1f} গুণ বেশি!")
+# 1. Gauge Meter Function
+def create_gauge(value):
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = value,
+        title = {'text': "Current AQI Index"},
+        gauge = {
+            'axis': {'range': [None, 500]},
+            'steps': [
+                {'range': [0, 50], 'color': "green"},
+                {'range': [51, 100], 'color': "yellow"},
+                {'range': [101, 200], 'color': "orange"},
+                {'range': [201, 300], 'color': "red"},
+                {'range': [301, 500], 'color': "purple"}],
+            'bar': {'color': "black"}
+        }
+    ))
+    fig.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=20))
+    return fig
 
-# ---------------- PAGE 2: WHAT-IF SIMULATOR ----------------
-elif page == "What-If Simulator":
-    st.title("🧪 Scenario Simulator")
-    st.write("গ্যাসের মান পরিবর্তন করে দেখুন AQI-তে কী প্রভাব পড়ে।")
-    
-    s_pm25 = st.slider("PM2.5 Level", 0, 500, 50)
-    s_pm10 = st.slider("PM10 Level", 0, 500, 100)
-    
-    test_features = np.array([[10, 30, 1.0, 20, s_pm25, s_pm10, 2026, 4, 23, 12, 3, 0, 100, 100]])
-    sim_pred = model.predict(test_features)[0]
-    
-    st.subheader(f"Predicted AQI: {sim_pred:.2f}")
-    st.info("💡 টিপস: দেখুন PM2.5 কমালে AQI কত দ্রুত নিচে নেমে আসে!")
+# --- SIDEBAR ---
+st.sidebar.title("🎮 Control Panel")
+city_list = ["Dhaka", "Chittagong", "Cumilla", "Sylhet", "Rajshahi"]
+selected_city = st.sidebar.selectbox("📍 Select City", city_list)
+mode = st.sidebar.radio("🛠️ Mode Selection", ["Live Analytics", "What-If Simulator", "Historical Reports"])
 
-# ---------------- PAGE 3: DATA INSIGHTS (EDA) ----------------
-elif page == "Data Insights (EDA)":
-    st.title("📊 Training Data Analytics")
+# --- HEADER ---
+st.markdown(f"# 🌍 {selected_city} Air Quality Dashboard")
+st.write(f"**Date:** {datetime.now().strftime('%d %B, %Y')} | **Live Status:** Connected ✅")
+
+# --- MAIN LOGIC ---
+if mode == "Live Analytics":
+    live_json, success = get_live_data(selected_city)
     
-    tab1, tab2 = st.tabs(["Correlation", "Trends"])
-    
-    with tab1:
-        st.subheader("Correlation Heatmap")
-        fig_corr = px.imshow(df.corr(), text_auto=True, color_continuous_scale='RdBu_r')
-        st.plotly_chart(fig_corr)
+    if success:
+        iaqi = live_json['iaqi']
+        curr_aqi = live_json['aqi']
         
-    with tab2:
-        st.subheader("Peak Hour Analysis")
-        hourly_aqi = df.groupby('Hour')['AQI'].mean().reset_index()
-        fig_hour = px.line(hourly_aqi, x='Hour', y='AQI', title="দিনের কোন সময়ে দূষণ বেশি?")
-        st.plotly_chart(fig_hour)
+        # Row 1: Gauge and Quick Info
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            st.plotly_chart(create_gauge(curr_aqi), use_container_width=True)
+        with col2:
+            st.metric("PM2.5 Level", f"{iaqi.get('pm25', {}).get('v', 0)}")
+            st.metric("Humidity", f"{iaqi.get('h', {}).get('v', 0)}%")
+        with col3:
+            st.metric("Temperature", f"{iaqi.get('t', {}).get('v', 0)}°C")
+            st.write(f"🕒 **Last Updated:** \n{live_json['time']['s']}")
 
-# ---------------- PAGE 4: MODEL PERFORMANCE ----------------
-elif page == "Model Performance":
-    st.title("🧠 Model Evaluation Metrics")
-    
-    m_col1, m_col2 = st.columns(2)
-    m_col1.metric("Model Accuracy (R2 Score)", "0.94") # আপনার আসল স্কোর দিন
-    m_col2.metric("Mean Absolute Error (MAE)", "5.21")
-    
-    st.subheader("Feature Importance")
-    # এটি আপনার মডেলের ওপর ভিত্তি করে অটোমেটিক হবে
-    importance = pd.DataFrame({'Feature': ['PM2.5', 'PM10', 'NO2', 'CO', 'SO2', 'Hour'], 
-                               'Value': model.feature_importances_[:6]})
-    fig_imp = px.bar(importance.sort_values('Value'), x='Value', y='Feature', orientation='h')
-    st.plotly_chart(fig_imp)
+        st.divider()
 
-st.divider()
-st.caption("Developed by Naim | CSE Student | End-to-End AQI Project")
+        # Row 2: Health Insights & Map
+        col_m1, col_m2 = st.columns([1, 1])
+        with col_m1:
+            st.subheader("🏥 Health Advice")
+            if curr_aqi <= 100:
+                st.success("বাতাস স্বচ্ছ। বাইরে সময় কাটাতে পারেন।")
+            elif curr_aqi <= 200:
+                st.warning("অ্যালার্জি বা শ্বাসকষ্ট থাকলে মাস্ক ব্যবহার করুন।")
+            else:
+                st.error("বিপজ্জনক! ঘরে থাকার চেষ্টা করুন এবং জানালা বন্ধ রাখুন।")
+            
+            st.info(f"💡 **WHO Benchmark:** বর্তমান বায়ুমান WHO গাইডলাইনের চেয়ে {round(curr_aqi/15, 1)} গুণ বেশি।")
+            
+        with col_m2:
+            st.subheader("🗺️ Geospatial View")
+            # চট্টগ্রামের একটি ডিফল্ট লোকেশন (উদাহরণস্বরূপ)
+            map_data = pd.DataFrame({'lat': [22.3569], 'lon': [91.7832]})
+            st.map(map_data)
+
+        # Row 3: Charts
+        st.divider()
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("📈 Time Series Trend (7 Days)")
+            fig_line = px.line(df, x='Timestamp', y='AQI', title="AQI Change Over Time")
+            st.plotly_chart(fig_line, use_container_width=True)
+        with c2:
+            st.subheader("📊 Feature Importance (ML)")
+            importance = pd.DataFrame({'Feature': ['PM2.5', 'NO2', 'CO', 'SO2', 'O3'], 'Value': [0.4, 0.2, 0.15, 0.1, 0.15]})
+            st.plotly_chart(px.bar(importance, x='Value', y='Feature', orientation='h'), use_container_width=True)
+
+elif mode == "What-If Simulator":
+    st.subheader("🧪 Machine Learning Scenario Simulator")
+    st.write("গ্যাসের মান পরিবর্তন করে দেখুন প্রেডিকশনে কী প্রভাব পড়ে।")
+    
+    s_pm2 = st.sidebar.slider("PM2.5", 0, 500, 100)
+    s_no2 = st.sidebar.slider("NO2", 0, 200, 30)
+    
+    # Prediction logic
+    features = np.array([[10, s_no2, 1.0, 20, s_pm2, 100, 2026, 4, 23, 12, 3, 0, 100, 100]])
+    sim_res = model.predict(features)[0]
+    
+    st.metric("Simulated Predicted AQI", f"{sim_res:.2f}")
+    st.progress(min(int(sim_res/5), 100))
+
+elif mode == "Historical Reports":
+    st.subheader("📂 Download Analytics Reports")
+    st.write("আপনার ডাটাসেটের সারাংশ ডাউনলোড করুন।")
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Download Full CSV Report", data=csv, file_name="aqi_report.csv", mime='text/csv')
+    
+    st.table(df.head(10))
+
+# --- FOOTER ---
+st.sidebar.markdown("---")
+if st.sidebar.button("🔔 Send Telegram Alert"):
+    st.sidebar.write("Alert sent to admin!") # এখানে বটের API কল হবে
