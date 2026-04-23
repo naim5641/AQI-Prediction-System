@@ -60,7 +60,7 @@ def create_gauge(value):
 
 # --- SIDEBAR ---
 st.sidebar.title("🎮 Control Panel")
-city_list = ["Dhaka", "Chittagong", "Cumilla", "Sylhet", "Rajshahi"]
+city_list = ["Dhaka", "agb", "Barishal", "Ctg", "Rajshahi","Gazipur","Khulna"]
 selected_city = st.sidebar.selectbox("📍 Select City", city_list)
 mode = st.sidebar.radio("🛠️ Mode Selection", ["Live Analytics", "What-If Simulator", "Historical Reports"])
 
